@@ -99,8 +99,9 @@
 #include "sgp30.h"
 #include "sps30.h"
 
-#include "circ_buff.h" // For the GPS parsing
+#include "circ_buff.h"      // For the GPS parsing
 #include "circ_buff_uint.h" // For the SAADC values
+#include "serializer.h"     // For creating a JSON type string to send over the BLE Link
 
 #include "minmea.h"
 
@@ -156,7 +157,7 @@ BLE_ADVERTISING_DEF(m_advertising);                                             
 APP_TIMER_DEF(m_update_master_timer_id);                                             /**< Update the smartphone application with the payload. */
 
 static uint16_t   m_conn_handle          = BLE_CONN_HANDLE_INVALID;                 /**< Handle of the current connection. */
-static uint16_t   m_ble_nus_max_data_len = BLE_GATT_ATT_MTU_DEFAULT - 3;            /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
+static uint16_t   m_ble_nus_max_data_len = 244u; //BLE_GATT_ATT_MTU_DEFAULT - 3;    /**< Maximum length of data (in bytes) that can be transmitted to the peer by the Nordic UART service module. */
 static ble_uuid_t m_adv_uuids[]          =                                          /**< Universally unique service identifier. */
 {
     {BLE_UUID_NUS_SERVICE, NUS_SERVICE_UUID_TYPE}
@@ -173,6 +174,8 @@ static uint32_t              m_adc_evt_counter;
 
 static uint32_t                m_adc_evt_counter = 0;
 static bool                    m_saadc_calibrate = false;
+
+static bool g_sendData = false;
 
 typedef struct 
 {
@@ -356,7 +359,7 @@ static void uart_init(void)
     const app_uart_comm_params_t comm_params =
     {
           ARDUINO_1_PIN,
-          TX_PIN_NUMBER,
+          ARDUINO_0_PIN,
           NULL,
           NULL,
           APP_UART_FLOW_CONTROL_ENABLED,
@@ -381,21 +384,15 @@ static void uart_init(void)
 }
 /**@snippet [UART Initialization] */
 
-// prase the incoming positional data to get latitude and longitude  
-bool parse_gps(char * incoming, gpsLatLong_t * positionContainer)
+// Reinterpret the float as a uint32_t (merely want to just save the bits here)
+uint32_t returnBits(const float x)
 {
- 
-    struct minmea_sentence_gll frame;
-    if(minmea_parse_gll(&frame, incoming))
-    {
-      positionContainer->latitude = minmea_tocoord(&frame.latitude);
-      positionContainer->longitude = minmea_tocoord(&frame.longitude);
-      return true;
-    }
-    
-    return false;
-
-} 
+    union {
+      uint32_t rawBits;
+      float floatBits;
+    } this_union = { .floatBits = x};
+    return this_union.rawBits;
+}
 
 // Update the host device with the latest positional data
 static void update_master_timer_handler(void * p_context)
@@ -403,25 +400,65 @@ static void update_master_timer_handler(void * p_context)
     ret_code_t err_code;
     s16 sensiron_code;
     bool m_parse_success;
-    char m_outData[256];
+    char m_outData[256u];
     gpsLatLong_t m_position;
 
     struct sps30_measurement m_sps30Measurement;
-    uint16_t m_dataReady;
-    uint16_t m_ethanolRawSignal;
-    uint16_t m_h2RawSignal;
-    uint32_t m_iaqBaseline;
-    uint16_t m_tvocPpb;
-    uint16_t m_co2Ppm;
+    trackingContainer_t m_txContainer = 
+    {
+      .ethRaw = 0u,
+      .h2Raw = 0u,
+      .tvoc = 0u,
+      .co2 = 0u,
+      .coRelative = 0u,
+      .noxRelative = 0u,
+      .pm2p5 = 0u,
+      .pm10 = 0u,
+      .latitudeValue = 0u,
+      .latitudeScale = 0u,
+      .longitudeValue = 0u,
+      .longitudeScale = 0u
+    };
 
-    
+    uint16_t m_dataReady = 0u;
+    uint16_t m_ethanolRawSignal = 0u;
+    uint16_t m_h2RawSignal = 0u;
+    uint32_t m_iaqBaseline = 0u;
+    uint16_t m_tvocPpb = 0u;
+    uint16_t m_co2Ppm = 0u;
+
+    uint16_t m_coRelative;
+    uint16_t m_noxRelative;
+
+    unsigned char m_txString[NRF_SDH_BLE_GATT_MAX_MTU_SIZE-3] = {0}; // Initialize the string for transmission
+    uint16_t length = NRF_SDH_BLE_GATT_MAX_MTU_SIZE-3; // Length of the string to transmit
+
+    struct minmea_sentence_gll frame;
+
+    // if(g_sendData)
+    // {
+    //    Avoids all the processing to minimise power usage, uncomment after debug
+    // }
 
     // get all the latest measurements (possibly from buffers for the I2C modules, this would reduce servicing overhead)
 
     circular_buffer_pop(&gpsBuffer, m_outData);
     // Parse the positional data
-
-    m_parse_success = parse_gps(m_outData, &m_position); // The global variable containing the positional data
+    if(minmea_parse_gll(&frame, m_outData))
+    {
+      m_txContainer.latitudeValue = returnBits(frame.latitude.value);
+      m_txContainer.latitudeScale = returnBits(frame.latitude.scale);
+      m_txContainer.longitudeValue = returnBits(frame.longitude.value);
+      m_txContainer.longitudeScale = returnBits(frame.longitude.scale);
+    }
+    else // keep this in case the default check fails
+    {
+      m_txContainer.latitudeValue = 0u;
+      m_txContainer.latitudeScale = 0u;
+      m_txContainer.longitudeValue = 0u;
+      m_txContainer.longitudeScale = 0u;
+    }
+    
     
     // Read the SPS-30 data
     sensiron_code = sps30_start_measurement();
@@ -433,13 +470,37 @@ static void update_master_timer_handler(void * p_context)
     sensiron_code = sgp30_measure_raw_blocking_read(&m_ethanolRawSignal, &m_h2RawSignal);
     // Calibrate the baseline IAQ (since we're moving and a previous baseline may be void)
     sensiron_code = sgp30_iaq_init();
-    // Get the equivalent CO2 concentration in PPM
-    sensiron_code = sgp30_measure_co2_eq_blocking_read(&m_co2Ppm);
-    // Get the equivalent TVOC concentration in PPB
-    sensiron_code = sgp30_measure_tvoc_blocking_read(&m_tvocPpb);
+    // Get the equivalent CO2 and TVOC concentration in PPM
+    sensiron_code = sgp30_measure_iaq_blocking_read(&m_tvocPpb, &m_co2Ppm);
     
-    // Form a JSON-type string, using strcat since a serializer is too heavyweight 
+    // pop the CO and NOx values off the buffer
+    uint_circular_buffer_pop(&g_saadcBufferCo, &m_coRelative);
+    uint_circular_buffer_pop(&g_saadcBufferNox, &m_noxRelative);
     
+    // Initializer the container to pass to the serializer
+    m_txContainer.ethRaw = m_ethanolRawSignal;
+    m_txContainer.h2Raw = m_h2RawSignal;
+    m_txContainer.tvoc = m_tvocPpb;
+    m_txContainer.co2 = m_co2Ppm;
+    m_txContainer.coRelative = m_coRelative;
+    m_txContainer.noxRelative = m_noxRelative;
+    m_txContainer.pm2p5 = returnBits(m_sps30Measurement.mc_2p5);
+    m_txContainer.pm10 = returnBits(m_sps30Measurement.mc_10p0);
+    
+    
+    // Form a JSON-type string, using strcat since a serializer is too heavyweight:
+    serialize(&m_txContainer, m_txString);
+
+    // transmit the string
+    err_code = ble_nus_data_send(&m_nus, (uint8_t*)m_txString, &length, m_conn_handle);
+    if ((err_code != NRF_ERROR_INVALID_STATE) && 
+        (err_code != NRF_ERROR_BUSY) &&
+        (err_code != NRF_ERROR_NOT_FOUND))
+    {
+      APP_ERROR_CHECK(err_code);
+    }
+    
+
 
 }
 
@@ -516,42 +577,31 @@ static void nrf_qwr_error_handler(uint32_t nrf_error)
 /**@snippet [Handling the data received over BLE] */
 static void nus_data_handler(ble_nus_evt_t * p_evt)
 {
-    uint8_t bme = 0xBBu;
+    
 
     //NRF_LOG_INFO("BLE NUS Event.");
     if (p_evt->type == BLE_NUS_EVT_RX_DATA)
     {
         uint32_t err_code;
 
-        NRF_LOG_INFO("Received data from BLE NUS.");
-        NRF_LOG_HEXDUMP_DEBUG(p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
+        //NRF_LOG_INFO("Received data from BLE NUS.");
+        //NRF_LOG_HEXDUMP_DEBUG(p_evt->params.rx_data.p_data, p_evt->params.rx_data.length);
 
         // If the string matches BME then write out the current temperature strncmp(parse_array, bme, 2) == 0
-        if(p_evt->params.rx_data.p_data[0] == bme)
+        if(p_evt->params.rx_data.p_data[0] == 'S')
         {
 
           // Do command stuff here
+          // Set a global boolean to send data back, no point sending
+          //g_sendData = true;
          
         }
-        else
+        else if(p_evt->params.rx_data.p_data[0] == 'E')
         {
-            for (uint32_t i = 0; i < p_evt->params.rx_data.length; i++)
-            {
-                do
-                {
-                    err_code = app_uart_put(p_evt->params.rx_data.p_data[i]);
-                    if ((err_code != NRF_SUCCESS) && (err_code != NRF_ERROR_BUSY))
-                    {
-                        NRF_LOG_ERROR("Failed receiving NUS message. Error 0x%x. ", err_code);
-                        APP_ERROR_CHECK(err_code);
-                    }
-                } while (err_code == NRF_ERROR_BUSY);
-            }
-            if (p_evt->params.rx_data.p_data[p_evt->params.rx_data.length - 1] == '\r')
-            {
-                while (app_uart_put('\n') == NRF_ERROR_BUSY);
-            }
+          //g_sendData = false;
         }
+
+        // This was sending the info on the UART, not needed currently, maybe for debug
 
   }
     
@@ -970,6 +1020,9 @@ void saadc_sampling_event_init(void)
 
 void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 {
+    uint16_t m_coRelative = 0u;
+    uint16_t m_noxRelative = 0u;
+
         
     ret_code_t err_code;
     if (p_event->type == NRF_DRV_SAADC_EVT_DONE)                                                        //Capture offset calibration complete event
@@ -988,8 +1041,12 @@ void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 
         NRF_LOG_INFO("ADC event number: %d\r\n",(int)m_adc_evt_counter);                                //Print the event number on UART
         
-        //NRF_LOG_INFO("RS1 RED: %d\n", p_event->data.done.p_buffer[0]); // should give channel 1
-        //NRF_LOG_INFO("RS1 OX:  %d\n", p_event->data.done.p_buffer[1]); // should give channel 2
+        //NRF_LOG_INFO("RS1 RED: %d\n", p_event->data.done.p_buffer[0]); // for debug
+        m_coRelative = (uint16_t)p_event->data.done.p_buffer[0];
+        m_noxRelative =  (uint16_t)p_event->data.done.p_buffer[1];
+
+        uint_circular_buffer_push(&g_saadcBufferCo, m_coRelative); 
+        uint_circular_buffer_push(&g_saadcBufferNox, m_noxRelative); 
 
         /*
         for (int i = 0; i < p_event->data.done.size; i++)
@@ -1210,7 +1267,7 @@ int main(void)
     nrf_delay_ms(10);
     nrf_gpio_pin_set(ARDUINO_2_PIN);
 
-    //advertising_start();
+    advertising_start();
     err_code = app_timer_start(m_update_master_timer_id, APP_TIMER_TICKS(10000), NULL); // start the main timer for data transfer
     APP_ERROR_CHECK(err_code);
     
