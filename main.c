@@ -427,6 +427,9 @@ static void update_master_timer_handler(void * p_context)
     uint16_t m_tvocPpb = 0u;
     uint16_t m_co2Ppm = 0u;
 
+    uint16_t baseCO2 = 0u;
+    uint16_t baseTVOC = 0u;
+
     uint16_t m_coRelative;
     uint16_t m_noxRelative;
 
@@ -454,9 +457,9 @@ static void update_master_timer_handler(void * p_context)
     else // keep this in case the default check fails
     {
       m_txContainer.latitudeValue = 0u;
-      m_txContainer.latitudeScale = 0u;
+      m_txContainer.latitudeScale = 1u; // Avoid divide by zero errors
       m_txContainer.longitudeValue = 0u;
-      m_txContainer.longitudeScale = 0u;
+      m_txContainer.longitudeScale = 1u;
     }
     
     
@@ -468,8 +471,12 @@ static void update_master_timer_handler(void * p_context)
     // Read the SGP30 data
     // Raw signal value
     sensiron_code = sgp30_measure_raw_blocking_read(&m_ethanolRawSignal, &m_h2RawSignal);
-    // Calibrate the baseline IAQ (since we're moving and a previous baseline may be void)
-    sensiron_code = sgp30_iaq_init();
+
+    sensiron_code = sgp30_get_iaq_baseline(&m_iaqBaseline);
+    baseCO2 = (uint16_t)((m_iaqBaseline >> 16u) & 0xFFFF); 
+    baseTVOC = (uint16_t)(m_iaqBaseline & 0xFFFF);
+
+
     // Get the equivalent CO2 and TVOC concentration in PPM
     sensiron_code = sgp30_measure_iaq_blocking_read(&m_tvocPpb, &m_co2Ppm);
     
@@ -484,7 +491,7 @@ static void update_master_timer_handler(void * p_context)
     m_txContainer.co2 = m_co2Ppm;
     m_txContainer.coRelative = m_coRelative;
     m_txContainer.noxRelative = m_noxRelative;
-    m_txContainer.pm2p5 = returnBits(m_sps30Measurement.mc_2p5);
+    m_txContainer.pm2p5 = returnBits(m_sps30Measurement.mc_1p0);
     m_txContainer.pm10 = returnBits(m_sps30Measurement.mc_10p0);
     
     
@@ -1041,7 +1048,9 @@ void saadc_callback(nrf_drv_saadc_evt_t const * p_event)
 
         NRF_LOG_INFO("ADC event number: %d\r\n",(int)m_adc_evt_counter);                                //Print the event number on UART
         
-        //NRF_LOG_INFO("RS1 RED: %d\n", p_event->data.done.p_buffer[0]); // for debug
+        NRF_LOG_INFO("RS1 RED: %d\n", p_event->data.done.p_buffer[0]); // for debug
+        NRF_LOG_INFO("RS1 OX: %d\n", p_event->data.done.p_buffer[1]); // for debug
+
         m_coRelative = (uint16_t)p_event->data.done.p_buffer[0];
         m_noxRelative =  (uint16_t)p_event->data.done.p_buffer[1];
 
@@ -1203,7 +1212,7 @@ int main(void)
     // Set-up and get a reading from the SGP30
     // Probe:
     
-    s16 sensiron_code = sgp30_probe();
+    s16 sensiron_code = sgp30_probe(); // already sets up the IAQ baseline
     if(sensiron_code != STATUS_OK)
     {
       err_code = NRF_ERROR_BUSY;
@@ -1223,15 +1232,6 @@ int main(void)
       err_code = NRF_ERROR_BUSY;
       APP_ERROR_CHECK(err_code);
     }
-
-    /*
-    sensiron_code = sgp30_measure_raw_blocking_read(&ethanol_raw_signal, &h2_raw_signal);
-    if(sensiron_code != STATUS_OK)
-    {
-      err_code = NRF_ERROR_BUSY;
-      APP_ERROR_CHECK(err_code);
-    }
-    */
     
     /* Re-probing de-initializing the TWI, so don't do this
     sensiron_code = sps30_probe();
@@ -1266,6 +1266,33 @@ int main(void)
     uart_init();
     nrf_delay_ms(10);
     nrf_gpio_pin_set(ARDUINO_2_PIN);
+
+    // Send commands to the GPS
+    char command[] = "$PMTK104*37\r\n";
+    uint8_t length = strlen(command); //sizeof(command)/sizeof(char);
+    uint8_t * msg = (uint8_t *)(command);
+    send_gps_msg(msg, length);
+
+    nrf_delay_ms(200u);
+
+    strcpy(command, "$PMTK301,1*2D\r\n");
+    length = strlen(command);
+    msg = (uint8_t *)(command);
+    send_gps_msg(msg, length);
+
+    nrf_delay_ms(200u);
+
+    strcpy(command, "$PMTK250,1,1,9600*16\r\n");
+    length = strlen(command);
+    msg = (uint8_t *)(command);
+    send_gps_msg(msg, length);
+
+    nrf_delay_ms(200u);
+
+    strcpy(command, "$PMTK458*3B\r\n");
+    length = strlen(command);
+    msg = (uint8_t *)(command);
+    send_gps_msg(msg, length);
 
     advertising_start();
     err_code = app_timer_start(m_update_master_timer_id, APP_TIMER_TICKS(10000), NULL); // start the main timer for data transfer

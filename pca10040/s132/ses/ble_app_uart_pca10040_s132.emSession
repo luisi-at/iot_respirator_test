@@ -4,6 +4,7 @@
  <Breakpoints groups="Breakpoints" active_group="Breakpoints">
   <BreakpointListItem trigger="" line="424" counter="0" hardwareBreakpoint="" isFunctionBreakpoint="false" action="" expression="" group="Breakpoints" type="Breakpoint" state="4" filename="../../../../bme680/bme680.c" useHWbreakpoint="false"/>
   <BreakpointListItem trigger="" line="530" counter="0" hardwareBreakpoint="" isFunctionBreakpoint="false" action="" expression="" group="Breakpoints" type="Breakpoint" state="4" filename="../../../../bme680/bme680.c" useHWbreakpoint="false"/>
+  <Exceptions set="MemManage;UsageFault_Coprocessor;UsageFault_CheckingError;UsageFault_StateError;BusFault;ExceptionEntryReturnFault;HardFault"/>
  </Breakpoints>
  <ExecutionProfileWindow/>
  <FrameBufferWindow>
@@ -48,8 +49,12 @@
  <Watch1>
   <Watches active="1" update="Never">
    <Watchpoint numelements="1" expression="received_command" evalMode="3" name="received_command" radix="16" linenumber="322" filename="../../../main.c" list=""/>
-   <Watchpoint numelements="80" expression="test_parse" evalMode="2" name="test_parse" radix="1" linenumber="0" filename="" list=""/>
-   <Watchpoint numelements="80" expression="data_array" evalMode="2" name="data_array" radix="-1" linenumber="0" filename="" list=""/>
+   <Watchpoint numelements="80" expression="test_parse" evalMode="2" name="test_parse" radix="1" linenumber="0" filename="../ses" list=""/>
+   <Watchpoint numelements="80" expression="data_array" evalMode="2" name="data_array" radix="-1" linenumber="0" filename="../ses" list=""/>
+   <Watchpoint numelements="2" expression="co2Char" evalMode="2" name="co2Char" radix="-1" linenumber="0" filename="" list=""/>
+   <Watchpoint numelements="2" expression="ethRawChar" evalMode="2" name="ethRawChar" radix="16" linenumber="0" filename="" list=""/>
+   <Watchpoint numelements="130" expression="constructBuffer" evalMode="2" name="constructBuffer" radix="16" linenumber="0" filename="" list=""/>
+   <Watchpoint numelements="140" expression="m_txString" evalMode="2" name="m_txString" radix="16" linenumber="0" filename="" list=""/>
   </Watches>
  </Watch1>
  <Watch2>
@@ -62,9 +67,11 @@
   <Watches active="0" update="Never"/>
  </Watch4>
  <Files>
-  <SessionOpenFile windowGroup="DockEditLeft" x="66" y="130" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../main.c" selected="1" top="101" codecName="Default"/>
-  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="25" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../../serializer/serializer.c" selected="0" top="0" codecName="Default"/>
-  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="98" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../../../../components/libraries/util/app_error_weak.c" selected="0" top="78" codecName=""/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="56" y="114" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../main.c" selected="0" top="94" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="21" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../../serializer/serializer.c" selected="0" top="1" codecName=""/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="102" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../../../../components/libraries/util/app_error_weak.c" selected="0" top="78" codecName=""/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="11437" useTextEdit="1" useBinaryEdit="0" left="0" path="../config/sdk_config.h" selected="0" top="11417" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="9" y="91" useTextEdit="1" useBinaryEdit="0" left="0" path="../../../../../../components/softdevice/s132/headers/ble_types.h" selected="1" top="62" codecName="Default"/>
  </Files>
  <ARMCrossStudioWindow activeProject="ble_app_uart_pca10040_s132" fileDialogDefaultFilter="*.c" autoConnectTarget="J-Link" buildConfiguration="Debug" debugSearchFileMap="" fileDialogInitialDirectory="/Users/alexluisi/Documents/Nordic_Semi/nRF5_SDK_15.0.0_a53641a/examples/my_projects/serializer" debugSearchPath="" autoConnectCapabilities="3711"/>
 </session>
